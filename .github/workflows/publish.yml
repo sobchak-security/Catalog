@@ -26,16 +26,23 @@ jobs:
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.1' }
       - name: Build tool binaries once
+        id: tools
         run: |
-          swift build --package-path tools -c release \
-              --product catalog-build \
-              --product catalog-sign \
-              --product catalog-publish
+          swift build --package-path tools -c release --product catalog-build
+          swift build --package-path tools -c release --product catalog-sign
+          swift build --package-path tools -c release --product catalog-publish
+
+          BIN_DIR=$(swift build --package-path tools -c release --show-bin-path)
+          echo "bin_dir=$BIN_DIR" >> "$GITHUB_OUTPUT"
+
+          test -x "$BIN_DIR/catalog-build"
+          test -x "$BIN_DIR/catalog-sign"
+          test -x "$BIN_DIR/catalog-publish"
       - name: Build snapshot
         id: meta
         run: |
           REV=${GITHUB_REF_NAME#catalog-v}
-          ./tools/.build/release/catalog-build \
+          "${{ steps.tools.outputs.bin_dir }}/catalog-build" \
               --in ./data/cameras --out ./dist/v${REV} --revision ${REV}
           echo "revision=${REV}" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
@@ -47,9 +54,9 @@ jobs:
         with:
           name: tools-binaries
           path: |
-            ./tools/.build/release/catalog-build
-            ./tools/.build/release/catalog-sign
-            ./tools/.build/release/catalog-publish
+            ${{ steps.tools.outputs.bin_dir }}/catalog-build
+            ${{ steps.tools.outputs.bin_dir }}/catalog-sign
+            ${{ steps.tools.outputs.bin_dir }}/catalog-publish
           retention-days: 7
 
   sign-and-publish:
