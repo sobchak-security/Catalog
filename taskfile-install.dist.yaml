@@ -293,15 +293,7 @@ tasks:
               "exclude": []
             }
           },
-          "bypass_actors": [
-            {
-              "actor_type": "Integration",
-              "actor_id": 15368,
-              "bypass_mode": "always"
-            }
-          ],
           "rules": [
-            { "type": "creation" },
             { "type": "deletion" },
             { "type": "update" }
           ]
