@@ -70,11 +70,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REV=${{ needs.build.outputs.revision }}
-          gh release create catalog-v${REV} \
-              --title "Catalog v${REV}" \
-              --notes-file ./CHANGELOG.fragment.md \
-              ./dist/v${REV}/manifest.signed.json \
-              ./dist/v${REV}/cameras/*.json
+          NOTES_ARGS=""
+          if [ -f ./CHANGELOG.fragment.md ]; then
+            NOTES_ARGS="--notes ./CHANGELOG.fragment.md"
+          fi
+          swift run --package-path tools catalog-publish \
+              --dist ./dist/v${REV} \
+              --tag catalog-v${REV} \
+              ${NOTES_ARGS}
 
   smoke:
     name: smoke
@@ -89,8 +92,10 @@ jobs:
       - name: Re-fetch and verify
         run: |
           REV=${{ needs.build.outputs.revision }}
+          KEY_ID=$(grep -m1 'current_key_id:' catalog.config.yml \
+              | sed "s/.*current_key_id: *['\"]//;s/['\"].*//")
           curl -fsSL -o /tmp/manifest.signed.json \
               "https://github.com/${{ github.repository }}/releases/download/catalog-v${REV}/manifest.signed.json"
           swift run --package-path tools catalog-sign verify \
               --in /tmp/manifest.signed.json \
-              --pubkey ./tools/keys/$(yq '.signing.current_key_id' catalog.config.yml).pub
+              --pubkey "./tools/keys/${KEY_ID}.pub"

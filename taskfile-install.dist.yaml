@@ -1,0 +1,372 @@
+# taskfile-install.dist.yaml
+#
+# ONE-TIME REPOSITORY SETUP — run this exactly once when bootstrapping a new
+# instance of the camera catalog repository on GitHub.
+#
+# Every task in this file calls the GitHub API via the `gh` CLI.  The machine
+# that runs these tasks therefore needs:
+#   • the GitHub CLI installed  (https://cli.github.com/)
+#   • an authenticated session  (gh auth login)
+#
+# After `task -t taskfile-install.dist.yaml all` has been run successfully and
+# the manual steps it prints have been completed, this file is no longer
+# needed for day-to-day operation.  Automated workflows (publish, weekly-health)
+# run entirely on GitHub-hosted runners which have the gh CLI pre-installed;
+# no local gh installation is required for those.
+#
+# Usage:
+#   task -t taskfile-install.dist.yaml         # list tasks
+#   task -t taskfile-install.dist.yaml all     # run full setup
+version: '3'
+
+vars:
+  OWNER:
+    sh: "grep -m1 'owner:' catalog.config.yml | sed 's/.*owner: *//' | tr -d '\\t\\r\\n '"
+  REPO:
+    sh: "grep -m1 'name:' catalog.config.yml | sed 's/.*name: *//' | tr -d '\\t\\r\\n '"
+
+tasks:
+  
+  # Default task to list all available tasks
+  default:
+    desc: "List all tasks"
+    summary: |
+      Displays a list of all configured tasks in this Taskfile.
+      Run `task` or `task default` to see this list.
+    cmds:
+      # Run the built-in task command to list tasks
+      - task --list-all
+
+  # ONE-TIME full setup — call this task to bootstrap a new repository
+  all:
+    desc: "[ONE-TIME] Apply all GitHub repository settings for the Catalog repo."
+    summary: |
+      One-time bootstrap task.  Runs the full suite of GitHub repository
+      configuration steps via the gh CLI: checks prerequisites, applies
+      general settings, creates the production environment, enforces
+      branch/tag rulesets, and enables security features.
+      Requires: gh CLI installed and authenticated (gh auth login).
+    cmds:
+      # Execute prerequisite check
+      - task: preflight
+      # Load config block
+      - task: config-check
+      # Sync general settings
+      - task: general-settings
+      # Sync environments
+      - task: production-env
+      # Sync main branch protection
+      - task: protect-main
+      # Sync release tag protection
+      - task: protect-release-tags
+      # Enable GHAS security features
+      - task: security-features
+      # Output manual steps required at the end
+      - task: manual-steps
+
+  # Ensure the environment holds the required tools and authentication
+  preflight:
+    desc: "Check gh CLI installation and authentication"
+    summary: |
+      Verifies that the GitHub CLI (`gh`) is installed and authenticated.
+      Fails early with clear instructions if either check fails.
+    cmds:
+      # Verify that the GitHub CLI binary is structurally available in the PATH
+      - |
+        if ! command -v gh &>/dev/null; then
+          echo "error: 'gh' CLI not found." >&2
+          echo "  Download and install from: https://cli.github.com/" >&2
+          echo "  Then run: gh auth login" >&2
+          exit 1
+        fi
+      # Verify that the user has an active session and is authenticated via `gh auth status`
+      - |
+        if ! gh auth status &>/dev/null; then
+          echo "error: gh is not authenticated. Run: gh auth login" >&2
+          exit 1
+        fi
+
+  # Parses the catalog.config.yml file needed for further tasks
+  config-check:
+    desc: "Check catalog.config.yml"
+    summary: |
+      Inspects the workspace for the `catalog.config.yml` file,
+      ensuring the OWNER and REPO variables can be correctly populated
+      for subsequent GitHub API calls.
+    cmds:
+      # Ensure the configuration file exists at the expected path
+      - |
+        if [ ! -f "catalog.config.yml" ]; then
+          echo "error: catalog.config.yml not found. Run this from the repo root." >&2
+          exit 1
+        fi
+      # Guarantee that we parsed out BOTH the owner and repo fields
+      - |
+        if [ -z "{{.OWNER}}" ] || [ -z "{{.REPO}}" ]; then
+          echo "error: could not parse owner/name from catalog.config.yml" >&2
+          exit 1
+        fi
+      # Provide feedback to the user on the target repository
+      - echo "==> Configuring {{.OWNER}}/{{.REPO}}"
+
+  # Applies baseline repository parameters such as wikis, issues, merge strategies
+  general-settings:
+    desc: "Apply general repository settings"
+    summary: |
+      Calls the GitHub REST API to update core repository configuration:
+      Disables issues, projects, wikis, etc., configures PR merge
+      behaviors, and enforces commit signoffs.
+    deps: [config-check, preflight]
+    cmds:
+      # Output boundary marker for the logs
+      - echo "--- Applying general repository settings"
+      # Execute the REST API PATCH to mass-update repo parameters
+      - |
+        gh api "repos/{{.OWNER}}/{{.REPO}}" \
+          -X PATCH \
+          --field description="Curated camera database for the RF Buddy app" \
+          --field homepage="https://github.com/{{.OWNER}}/{{.REPO}}" \
+          --field has_issues=false \
+          --field has_projects=false \
+          --field has_wiki=false \
+          --field has_discussions=false \
+          --field allow_squash_merge=true \
+          --field allow_merge_commit=false \
+          --field allow_rebase_merge=false \
+          --field squash_merge_commit_title="PR_TITLE" \
+          --field squash_merge_commit_message="PR_BODY" \
+          --field delete_branch_on_merge=true \
+          --field allow_auto_merge=false \
+          --field web_commit_signoff_required=true \
+          > /dev/null
+      # Log success block
+      - echo "    done."
+
+  # Automates the creation of the target runtime environments
+  production-env:
+    desc: "Configuring 'production' environment"
+    summary: |
+      Creates or updates the 'production' GitHub environment.
+      Sets the current repository owner as the required reviewer, deletes stale
+      deployment policies, and imposes a new target tag policy.
+    deps: [config-check, preflight]
+    cmds:
+      # Look up the necessary User ID for assigning environment review privileges
+      - |
+        echo "--- Configuring 'production' environment"
+        USER_ID=$(gh api "users/{{.OWNER}}" --jq '.id')
+        echo "    reviewer user ID: $USER_ID"
+        
+        # Put the environment configuration with review rules active.
+        # deployment_branch_policy must be a nested object, not a string,
+        # so we supply the full body as JSON via --input rather than --field.
+        printf '{
+          "reviewers": [{"type": "User", "id": %s}],
+          "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}
+        }' "$USER_ID" \
+        | gh api "repos/{{.OWNER}}/{{.REPO}}/environments/production" \
+          -X PUT \
+          --input - \
+          > /dev/null
+        
+        # Clear out any pre-existing or stale Deployment Branch Policies idempotently
+        POLICY_IDS=$(gh api "repos/{{.OWNER}}/{{.REPO}}/environments/production/deployment-branch-policies" \
+          --jq '.branch_policies[].id' 2>/dev/null || true)
+        for POLICY_ID in $POLICY_IDS; do
+          if [ -n "$POLICY_ID" ]; then
+            gh api "repos/{{.OWNER}}/{{.REPO}}/environments/production/deployment-branch-policies/$POLICY_ID" \
+              -X DELETE > /dev/null
+          fi
+        done
+        
+        # Enforce that only valid target release tags may deploy to this environment
+        gh api "repos/{{.OWNER}}/{{.REPO}}/environments/production/deployment-branch-policies" \
+          -X POST \
+          --field name="catalog-v*" \
+          --field type="tag" \
+          > /dev/null
+        echo "    done (manual step remaining: add ED25519_PRIVATE_KEY secret via GitHub UI)."
+
+  # Forces protected branch strategies against `main`
+  protect-main:
+    desc: "Applying 'protect-main' branch ruleset"
+    summary: |
+      Configures branch protection for `refs/heads/main` via the GitHub rulesets API.
+      Requires signed commits, passing status checks (validate), PR approvals,
+      and disallows force pushes or branch deletion by regular users.
+    deps: [config-check, preflight]
+    cmds:
+      # Boundary feedback
+      - echo "--- Applying 'protect-main' branch ruleset"
+      # Cleanup existing ruleset so running the task is fully idempotent
+      - |
+        EXISTING_ID=$(gh api "repos/{{.OWNER}}/{{.REPO}}/rulesets" \
+          --jq '.[] | select(.name=="protect-main") | .id' 2>/dev/null || true)
+        
+        if [[ -n "$EXISTING_ID" ]]; then
+          echo "    removing stale ruleset id=$EXISTING_ID"
+          gh api "repos/{{.OWNER}}/{{.REPO}}/rulesets/$EXISTING_ID" -X DELETE > /dev/null
+        fi
+        
+        # Create the new strict ruleset ensuring stable code transitions on `main`
+        gh api "repos/{{.OWNER}}/{{.REPO}}/rulesets" \
+          -X POST \
+          --input - <<'EOF'
+        {
+          "name": "protect-main",
+          "target": "branch",
+          "enforcement": "active",
+          "conditions": {
+            "ref_name": {
+              "include": ["refs/heads/main"],
+              "exclude": []
+            }
+          },
+          "bypass_actors": [
+            {
+              "actor_type": "RepositoryRole",
+              "actor_id": 5,
+              "bypass_mode": "always"
+            }
+          ],
+          "rules": [
+            { "type": "deletion" },
+            { "type": "non_fast_forward" },
+            { "type": "required_linear_history" },
+            { "type": "required_signatures" },
+            {
+              "type": "pull_request",
+              "parameters": {
+                "required_approving_review_count": 1,
+                "dismiss_stale_reviews_on_push": true,
+                "require_code_owner_review": true,
+                "require_last_push_approval": true,
+                "required_review_thread_resolution": true
+              }
+            },
+            {
+              "type": "required_status_checks",
+              "parameters": {
+                "strict_required_status_checks_policy": true,
+                "required_status_checks": [
+                  { "context": "validate" }
+                ]
+              }
+            }
+          ]
+        }
+        EOF
+      # Trace log for success
+      - echo "    done."
+
+  # Guarantees the immutability of version tags once created
+  protect-release-tags:
+    desc: "Applying 'protect-release-tags' tag ruleset"
+    summary: |
+      Prevents accidental or malicious modification/deletion of release tags.
+      Restricts creation to only the integration bot, enforcing strict release pipelines.
+    deps: [config-check, preflight]
+    cmds:
+      # Echo initialization step
+      - echo "--- Applying 'protect-release-tags' tag ruleset"
+      # Cleanup existing ruleset to replace cleanly
+      - |
+        EXISTING_ID=$(gh api "repos/{{.OWNER}}/{{.REPO}}/rulesets" \
+          --jq '.[] | select(.name=="protect-release-tags") | .id' 2>/dev/null || true)
+        
+        if [[ -n "$EXISTING_ID" ]]; then
+          echo "    removing stale ruleset id=$EXISTING_ID"
+          gh api "repos/{{.OWNER}}/{{.REPO}}/rulesets/$EXISTING_ID" -X DELETE > /dev/null
+        fi
+        
+        # Deploy rules preventing updates/deletions on all `catalog-v*` tags
+        gh api "repos/{{.OWNER}}/{{.REPO}}/rulesets" \
+          -X POST \
+          --input - <<'EOF'
+        {
+          "name": "protect-release-tags",
+          "target": "tag",
+          "enforcement": "active",
+          "conditions": {
+            "ref_name": {
+              "include": ["refs/tags/catalog-v*"],
+              "exclude": []
+            }
+          },
+          "bypass_actors": [
+            {
+              "actor_type": "Integration",
+              "actor_id": 15368,
+              "bypass_mode": "always"
+            }
+          ],
+          "rules": [
+            { "type": "creation" },
+            { "type": "deletion" },
+            { "type": "update" }
+          ]
+        }
+        EOF
+      # Print success status
+      - echo "    done."
+
+  # Auditing features targeting potential source code vulnerabilities
+  security-features:
+    desc: "Enabling security features"
+    summary: |
+      Flicks the switch on GitHub Advanced Security features including
+      Dependabot updates/alerts, Secret Scanning, and Push Protection features.
+    deps: [config-check, preflight]
+    cmds:
+      # Signifier marker
+      - echo "--- Enabling security features"
+      # Engage Dependabot vulnerability alerts
+      - |
+        gh api "repos/{{.OWNER}}/{{.REPO}}/vulnerability-alerts" -X PUT > /dev/null
+        echo "    Dependabot vulnerability alerts: enabled"
+      # Engage Dependabot automated security PR issuance
+      - |
+        gh api "repos/{{.OWNER}}/{{.REPO}}/automated-security-fixes" -X PUT > /dev/null
+        echo "    Dependabot automated security fixes: enabled"
+      # Enable secret scanning and immediately block any found secrets from being pushed
+      - |
+        gh api "repos/{{.OWNER}}/{{.REPO}}" \
+          -X PATCH \
+          --field 'security_and_analysis={"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}' \
+          > /dev/null
+        echo "    Secret scanning + push protection: enabled"
+
+  # Provides context on what APIs can't cover requiring manual overrides
+  manual-steps:
+    desc: "Print manual steps remaining"
+    summary: |
+      Outputs a textual guide detailing necessary follow-ups that could not
+      be automated via the GitHub API (e.g., loading repository secrets, adjusting Actions permissions).
+    cmds:
+      # Display an informative wrap-up manual with actionable items
+      - |
+        echo ""
+        echo "==> Configuration complete."
+        echo ""
+        echo "Remaining manual steps:"
+        echo ""
+        echo "  1. Settings → Environments → production → Secrets"
+        echo "     → Add secret: ED25519_PRIVATE_KEY  (paste the base64-encoded private key)"
+        echo ""
+        echo "  2. Settings → Actions → General"
+        echo "     Actions permissions:"
+        echo "       • Select: 'Allow OWNER, and select non-OWNER, actions and reusable workflows'"
+        echo "       • Check:  'Allow actions created by GitHub'  (covers actions/* and github/*)"
+        echo "       • Uncheck: 'Allow Marketplace actions by verified creators'"
+        echo "       • Specified actions text box — paste exactly:"
+        echo "           SwiftyLab/setup-swift@*"
+        echo "       → Save"
+        echo "     Workflow permissions:"
+        echo "       • Select: 'Read repository contents and packages permissions'  (restricted)"
+        echo "       • Uncheck: 'Allow GitHub Actions to create and approve pull requests'"
+        echo "       → Save"
+        echo "     Fork pull request workflows:"
+        echo "       • Select: 'Require approval for first-time contributors'  (default)"
+        echo "       → Save"
+        echo ""
+        echo "  3. Run 'trufflehog filesystem .' locally to confirm no secret leakage."
