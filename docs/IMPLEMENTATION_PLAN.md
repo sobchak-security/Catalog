@@ -914,7 +914,7 @@ jobs:
           fetch-depth: 0
       - uses: SwiftyLab/setup-swift@v1   # pin by SHA in M6
         with:
-          swift-version: '6.0'
+          swift-version: '6.1'
       - name: Build tools
         run: swift build --package-path tools -c release
       - name: Validate schemas
@@ -972,7 +972,7 @@ jobs:
           git merge-base --is-ancestor ${{ github.sha }} origin/main \
             || (echo "::error::Tag not on main"; exit 1)
       - uses: SwiftyLab/setup-swift@v1
-        with: { swift-version: '6.0' }
+        with: { swift-version: '6.1' }
       - name: Build snapshot
         id: meta
         run: |
@@ -999,7 +999,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: snapshot, path: ./dist/v${{ needs.build.outputs.revision }} }
       - uses: SwiftyLab/setup-swift@v1
-        with: { swift-version: '6.0' }
+        with: { swift-version: '6.1' }
       - name: Sign manifest
         env:
           ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
@@ -1029,7 +1029,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: SwiftyLab/setup-swift@v1
-        with: { swift-version: '6.0' }
+        with: { swift-version: '6.1' }
       - name: Wait for CDN
         run: sleep 30
       - name: Re-fetch and verify
@@ -1062,7 +1062,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: SwiftyLab/setup-swift@v1
-        with: { swift-version: '6.0' }
+        with: { swift-version: '6.1' }
       - name: Build tools
         run: swift build --package-path tools -c release
       - name: Probe CDN endpoints
