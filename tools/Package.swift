@@ -9,12 +9,18 @@ let package = Package(
             url: "https://github.com/apple/swift-argument-parser.git",
             from: "1.5.0"
         ),
+        .package(
+            url: "https://github.com/apple/swift-crypto.git",
+            from: "3.8.0"
+        ),
     ],
     targets: [
         // Shared library — models, validation logic, loaders
         .target(
             name: "CatalogKit",
-            dependencies: []
+            dependencies: [
+                .product(name: "Crypto", package: "swift-crypto"),
+            ]
         ),
 
         // catalog-validate: schema validation on every PR

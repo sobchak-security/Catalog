@@ -14,11 +14,21 @@ struct ValidateCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "catalog-validate",
         abstract: "Validate RF Buddy Catalog files.",
-        subcommands: [CdnProbeCommand.self, LinkRotCommand.self]
+        subcommands: [ValidateSubcommand.self, CdnProbeCommand.self, LinkRotCommand.self],
+        defaultSubcommand: ValidateSubcommand.self
+    )
+}
+
+// MARK: - validate subcommand (default)
+
+struct ValidateSubcommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "validate",
+        abstract: "Validate all camera JSON files in a directory."
     )
 
     // Default invocation: catalog-validate <cameras-dir> [options]
-    // Subcommands handle cdn-probe and link-rot (implemented in M5).
+    // Explicit invocation: catalog-validate validate <cameras-dir> [options]
 
     @Argument(help: "Path to the data/cameras directory.")
     var camerasDirectory: String
