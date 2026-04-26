@@ -36,10 +36,32 @@ jobs:
               --schema ./schema/camera.schema.json \
               --report-format=github
       - name: Canonical-JSON round-trip
+        id: roundtrip
         run: |
           ./tools/.build/release/catalog-build \
               --in ./data/cameras --out ./dist/_check --no-sign
           diff -ruN ./data/cameras ./dist/_check/cameras
+      - name: Generate PR summary
+        if: always()
+        run: |
+          mkdir -p ./dist/_check
+          {
+            echo "### Validation report"
+            echo ""
+            if [ "${{ steps.schema.outcome }}" = "success" ]; then
+              echo "✅ Schema validation passed"
+            else
+              echo "❌ Schema validation failed — see annotations above"
+            fi
+            echo ""
+            if [ "${{ steps.roundtrip.outcome }}" = "success" ]; then
+              echo "✅ Canonical-JSON round-trip clean"
+            elif [ "${{ steps.roundtrip.outcome }}" = "failure" ]; then
+              echo "❌ Canonical-JSON round-trip detected differences"
+            else
+              echo "⏭️ Canonical-JSON round-trip skipped"
+            fi
+          } > ./dist/_check/summary.md
       - name: Comment diff summary
         if: always()
         uses: actions/github-script@v7 # pin by SHA in M6
