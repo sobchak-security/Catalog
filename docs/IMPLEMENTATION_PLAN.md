@@ -909,7 +909,7 @@ jobs:
     name: validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4   # pin by SHA in M6
+      - uses: actions/checkout@v6   # pin by SHA in M6
         with:
           fetch-depth: 0
       - uses: SwiftyLab/setup-swift@v1   # pin by SHA in M6
@@ -965,7 +965,7 @@ jobs:
     outputs:
       revision: ${{ steps.meta.outputs.revision }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
       - name: Verify tag is on main
         run: |
@@ -995,7 +995,7 @@ jobs:
       contents: write
       id-token: write                  # for future Sigstore / attestations
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
         with: { name: snapshot, path: ./dist/v${{ needs.build.outputs.revision }} }
       - uses: SwiftyLab/setup-swift@v1
@@ -1027,7 +1027,7 @@ jobs:
     needs: [build, sign-and-publish]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.0' }
       - name: Wait for CDN
@@ -1060,7 +1060,7 @@ jobs:
   health:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.0' }
       - name: Build tools
