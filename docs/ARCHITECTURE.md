@@ -278,7 +278,11 @@ the `signature` field elided. The full canonicalisation rules live in
 
 ---
 
-## 6. Publishing flow
+## 6. Publishing pipeline implementation and optimizations
+
+The release pipeline is implemented in `.github/workflows/publish.yml`
+and is intentionally split into three jobs with strict handoff between
+them.
 
 ```mermaid
 sequenceDiagram
@@ -290,33 +294,167 @@ sequenceDiagram
     participant CDN as jsDelivr / raw.githubusercontent
     participant App as RF Buddy app
 
-    Dev->>Repo: PR (edit data/cameras/*.json)
-    Repo->>CI: pr-validate.yml
-    CI-->>Repo: ✓ schema, citations, uniqueness
     Dev->>Repo: merge to main
-    Dev->>Repo: git tag catalog-v17
-    Repo->>CI: publish.yml
-    CI->>Env: request signing key
-    Env-->>CI: ED25519_PRIVATE_KEY (in-memory only)
-    CI->>CI: build snapshot, sign manifest
-    CI->>Rel: gh release create catalog-v17 ./dist/*
+    Dev->>Repo: push tag catalog-v{N}
+    Repo->>CI: publish.yml (trigger)
+
+    rect rgb(235,245,255)
+      Note over CI: Job 1: build
+      CI->>CI: verify tag commit is reachable from main
+      CI->>CI: build tool binaries once (catalog-build/sign/publish)
+      CI->>CI: build snapshot dist/v{N}
+      CI->>CI: upload artifacts (snapshot + tools-binaries)
+    end
+
+    rect rgb(245,255,235)
+      Note over CI,Env: Job 2: sign-and-publish (protected)
+      CI->>Env: request environment approval + secret access
+      Env-->>CI: ED25519_PRIVATE_KEY (in-memory only)
+      CI->>CI: download artifacts, sign manifest
+      CI->>Rel: create GitHub Release via catalog-publish
+    end
+
+    rect rgb(255,245,235)
+      Note over CI: Job 3: smoke
+      CI->>CDN: fetch newly published manifest.signed.json
+      CI->>CI: verify signature with public key from repo
+    end
+
     Rel-->>CDN: assets cacheable
     App->>CDN: daily manifest poll
     CDN-->>App: signed manifest (304 most days)
-    App->>CDN: deltas where contentHash changed
+    App->>CDN: fetch deltas where contentHash changed
     App->>App: verify signature, atomic swap
 ```
 
-Two important properties:
+### 6.1 Trigger and orchestration
+
+- Trigger: push of tag `catalog-v*`.
+- Concurrency guard: one workflow per ref (`publish-${github.ref}`),
+  with no in-progress cancellation for the same ref.
+- Revision derivation: `{N}` is parsed from the tag name and carried as
+  an output from the `build` job to downstream jobs.
+
+### 6.2 Job 1: build (no secrets)
+
+Responsibilities:
+
+1. Checkout source and verify that the tagged commit is an ancestor of
+   `main` (prevents off-branch releases).
+2. Install Swift toolchain for CI.
+3. Compile release binaries for:
+   - `catalog-build`
+   - `catalog-sign`
+   - `catalog-publish`
+4. Build the catalog snapshot (`dist/v{N}`) using `catalog-build`.
+5. Upload two artifacts:
+   - `snapshot` (manifest + per-model files)
+   - `tools-binaries` (compiled Swift executables)
+
+Security and efficiency intent:
+
+- No signing key is available in this job.
+- Compilation is done once here to avoid repeating expensive Swift
+  builds in downstream jobs.
+
+### 6.3 Job 2: sign-and-publish (protected environment)
+
+Responsibilities:
+
+1. Wait for required environment approval (`production`).
+2. Download `snapshot` and `tools-binaries` artifacts.
+3. Mark downloaded binaries executable (artifact mode preservation is
+   not guaranteed across platforms).
+4. Sign `manifest.json` into `manifest.signed.json` using
+   `ED25519_PRIVATE_KEY`.
+5. Generate build provenance attestation for the signed manifest.
+6. Publish release assets by executing `catalog-publish`.
+
+Implementation details:
+
+- `catalog-publish` shells out to GitHub CLI (`gh`) on the runner.
+- Release notes are optional and included only when
+  `CHANGELOG.fragment.md` exists.
+- Job permissions are minimal for purpose:
+  - `contents: write` (release creation)
+  - `id-token: write` (attestation / future signing workflows)
+
+### 6.4 Job 3: smoke (post-publish verification)
+
+Responsibilities:
+
+1. Download `tools-binaries` artifact and mark binaries executable.
+2. Wait briefly for release propagation.
+3. Fetch `manifest.signed.json` from the published release URL.
+4. Resolve the active public key id from `catalog.config.yml` and
+   verify signature with repository-pinned public key material.
+
+This validates that what is publicly retrievable is also verifiable by
+the same trust anchors used by the consumer.
+
+### 6.5 Optimizations currently in place
+
+The pipeline is optimized for free-tier minute usage without reducing
+integrity checks:
+
+- Single compile pass per workflow run:
+  tool binaries are built once in `build`, then reused.
+- Artifact-based handoff:
+  downstream jobs consume compiled binaries instead of running
+  `swift run` (which would compile again).
+- Secret minimization:
+  only `sign-and-publish` touches `ED25519_PRIVATE_KEY`.
+- Failure containment:
+  smoke verification runs after publish and fails the workflow if
+  public retrieval or signature verification is broken.
+- Deterministic release path:
+  release creation is centralized in `catalog-publish` so command logic
+  does not diverge between local tests and CI.
+
+#### Cost profile (cold vs warm runs)
+
+The table below gives practical expectations for the `publish.yml`
+workflow on GitHub-hosted `ubuntu-latest` runners.
+
+| Stage | Typical cold run | Typical warm run | Minute driver |
+|------|-------------------|------------------|---------------|
+| Job 1: build | ~3-6 min | ~2-4 min | SwiftPM dependency resolution + release compilation + snapshot build |
+| Job 2: sign-and-publish | ~1-3 min | ~1-2 min | Artifact download, manifest signing, release upload |
+| Job 3: smoke | ~1-2 min | ~1-2 min | CDN wait + fetch + signature verification |
+| Manual approval wait (environment gate) | variable | variable | Human latency (not runner CPU-bound work) |
+
+Interpretation:
+
+- **Cold run** means dependency fetch and initial compilation are paid in
+  this workflow run.
+- **Warm run** means dependencies/toolchain state are effectively hot
+  and artifact reuse avoids repeat compilation in downstream jobs.
+- The largest billable slice is almost always **Job 1 build**; that is
+  why single-pass compile plus artifact fan-out is the primary
+  optimization in this architecture.
+
+### 6.6 Optional future optimization: cross-run caching
+
+Cross-run caching for SwiftPM dependencies and build outputs is not
+currently required for correctness. It can reduce minutes further, but
+it introduces cache-key design and invalidation complexity. If adopted,
+cache keys should include at minimum:
+
+- OS and Swift version
+- `tools/Package.resolved`
+- hashes of `tools/Sources/**` and `tools/Package.swift`
+
+This preserves correctness while improving warm-run latency.
+
+Two important properties remain unchanged:
 
 - **The signing key never leaves the protected environment.** It is
   injected as an environment-scoped secret, used in-memory by the
   signer step, and never persisted to disk. The runner is destroyed
   after the job.
-- **The published assets are immutable.** Every `catalog-v{N}` release
-  is a permanent reference. The manifest the app stores carries the
-  revision number; rolling back is just publishing a new release with
-  an *older* manifest (revision number always monotonic forward).
+- **Published release assets are immutable by policy.** Tag rulesets
+  prevent updates/deletions for `catalog-v*` tags, preserving release
+  integrity for consumer fetches.
 
 ---
 

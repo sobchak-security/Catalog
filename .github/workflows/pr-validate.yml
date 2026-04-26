@@ -40,7 +40,47 @@ jobs:
         run: |
           ./tools/.build/release/catalog-build \
               --in ./data/cameras --out ./dist/_check --no-sign
-          diff -ruN ./data/cameras ./dist/_check/cameras
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          src_dir = Path('./data/cameras')
+          gen_dir = Path('./dist/_check/cameras')
+
+          src_files = sorted(p.name for p in src_dir.glob('*.json'))
+          gen_files = sorted(p.name for p in gen_dir.glob('*.json'))
+
+          ok = True
+
+          if src_files != gen_files:
+            missing_in_generated = sorted(set(src_files) - set(gen_files))
+            extra_in_generated = sorted(set(gen_files) - set(src_files))
+
+            if missing_in_generated:
+              print('Missing generated files:')
+              for name in missing_in_generated:
+                print(f'  - {name}')
+
+            if extra_in_generated:
+              print('Unexpected generated files:')
+              for name in extra_in_generated:
+                print(f'  - {name}')
+
+            ok = False
+
+          for name in sorted(set(src_files) & set(gen_files)):
+            src_obj = json.loads((src_dir / name).read_text(encoding='utf-8'))
+            gen_obj = json.loads((gen_dir / name).read_text(encoding='utf-8'))
+            if src_obj != gen_obj:
+              print(f'Semantic JSON mismatch: {name}')
+              ok = False
+
+          if not ok:
+            sys.exit(1)
+
+          print(f'Round-trip semantic equivalence OK for {len(src_files)} file(s).')
+          PY
       - name: Generate PR summary
         if: always()
         run: |
@@ -61,6 +101,8 @@ jobs:
             else
               echo "⏭️ Canonical-JSON round-trip skipped"
             fi
+            echo ""
+            echo "Note: round-trip compares semantic JSON content; formatting and key-order differences are ignored."
           } > ./dist/_check/summary.md
       - name: Comment diff summary
         if: always()

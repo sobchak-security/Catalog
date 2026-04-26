@@ -25,17 +25,31 @@ jobs:
             || (echo "::error::Tag not on main"; exit 1)
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.1' }
+      - name: Build tool binaries once
+        run: |
+          swift build --package-path tools -c release \
+              --product catalog-build \
+              --product catalog-sign \
+              --product catalog-publish
       - name: Build snapshot
         id: meta
         run: |
           REV=${GITHUB_REF_NAME#catalog-v}
-          swift run --package-path tools catalog-build \
+          ./tools/.build/release/catalog-build \
               --in ./data/cameras --out ./dist/v${REV} --revision ${REV}
           echo "revision=${REV}" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
           name: snapshot
           path: ./dist/v${{ steps.meta.outputs.revision }}
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tools-binaries
+          path: |
+            ./tools/.build/release/catalog-build
+            ./tools/.build/release/catalog-sign
+            ./tools/.build/release/catalog-publish
           retention-days: 7
 
   sign-and-publish:
@@ -52,14 +66,20 @@ jobs:
         with:
           name: snapshot
           path: ./dist/v${{ needs.build.outputs.revision }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: tools-binaries
+          path: ./tools-bin
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.1' }
+      - name: Ensure tool binaries are executable
+        run: chmod +x ./tools-bin/catalog-build ./tools-bin/catalog-sign ./tools-bin/catalog-publish
       - name: Sign manifest
         env:
           ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
         run: |
           REV=${{ needs.build.outputs.revision }}
-          swift run --package-path tools catalog-sign \
+          ./tools-bin/catalog-sign \
               --in ./dist/v${REV}/manifest.json \
               --out ./dist/v${REV}/manifest.signed.json
       - uses: actions/attest-build-provenance@v1   # pin in M6
@@ -74,7 +94,7 @@ jobs:
           if [ -f ./CHANGELOG.fragment.md ]; then
             NOTES_ARGS="--notes ./CHANGELOG.fragment.md"
           fi
-          swift run --package-path tools catalog-publish \
+          ./tools-bin/catalog-publish \
               --dist ./dist/v${REV} \
               --tag catalog-v${REV} \
               ${NOTES_ARGS}
@@ -85,8 +105,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: tools-binaries
+          path: ./tools-bin
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.1' }
+      - name: Ensure tool binaries are executable
+        run: chmod +x ./tools-bin/catalog-build ./tools-bin/catalog-sign ./tools-bin/catalog-publish
       - name: Wait for CDN
         run: sleep 30
       - name: Re-fetch and verify
@@ -96,6 +122,6 @@ jobs:
               | sed "s/.*current_key_id: *['\"]//;s/['\"].*//")
           curl -fsSL -o /tmp/manifest.signed.json \
               "https://github.com/${{ github.repository }}/releases/download/catalog-v${REV}/manifest.signed.json"
-          swift run --package-path tools catalog-sign verify \
+          ./tools-bin/catalog-sign verify \
               --in /tmp/manifest.signed.json \
               --pubkey "./tools/keys/${KEY_ID}.pub"

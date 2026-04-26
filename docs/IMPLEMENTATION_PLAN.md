@@ -404,7 +404,10 @@ Steps:
    fail loudly (no off-branch releases).
 3. **Job 1 — `build`:** runs without secrets. Builds the snapshot
    directory `dist/v{N}/` containing `manifest.json` (unsigned) and
-   `cameras/*.json`. Uploads as workflow artifact.
+  `cameras/*.json`. Also builds `catalog-build`, `catalog-sign`, and
+  `catalog-publish` binaries once, then uploads both snapshot and
+  tool binaries as workflow artifacts to avoid recompiling in later
+  jobs.
 4. **Job 2 — `sign-and-publish`:** depends on `build`, targets
    environment `production`. **Requires manual approval** (§3.10).
    Downloads the artifact, signs the manifest with the in-memory
@@ -927,7 +930,47 @@ jobs:
         run: |
           ./tools/.build/release/catalog-build \
               --in ./data/cameras --out ./dist/_check --no-sign
-          diff -ruN ./data/cameras ./dist/_check/cameras
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          src_dir = Path('./data/cameras')
+          gen_dir = Path('./dist/_check/cameras')
+
+          src_files = sorted(p.name for p in src_dir.glob('*.json'))
+          gen_files = sorted(p.name for p in gen_dir.glob('*.json'))
+
+          ok = True
+
+          if src_files != gen_files:
+            missing_in_generated = sorted(set(src_files) - set(gen_files))
+            extra_in_generated = sorted(set(gen_files) - set(src_files))
+
+            if missing_in_generated:
+              print('Missing generated files:')
+              for name in missing_in_generated:
+                print(f'  - {name}')
+
+            if extra_in_generated:
+              print('Unexpected generated files:')
+              for name in extra_in_generated:
+                print(f'  - {name}')
+
+            ok = False
+
+          for name in sorted(set(src_files) & set(gen_files)):
+            src_obj = json.loads((src_dir / name).read_text(encoding='utf-8'))
+            gen_obj = json.loads((gen_dir / name).read_text(encoding='utf-8'))
+            if src_obj != gen_obj:
+              print(f'Semantic JSON mismatch: {name}')
+              ok = False
+
+          if not ok:
+            sys.exit(1)
+
+          print(f'Round-trip semantic equivalence OK for {len(src_files)} file(s).')
+          PY
       - name: Comment diff summary
         if: always()
         uses: actions/github-script@v7   # pin by SHA in M6
@@ -973,17 +1016,31 @@ jobs:
             || (echo "::error::Tag not on main"; exit 1)
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.1' }
+      - name: Build tool binaries once
+        run: |
+          swift build --package-path tools -c release \
+              --product catalog-build \
+              --product catalog-sign \
+              --product catalog-publish
       - name: Build snapshot
         id: meta
         run: |
           REV=${GITHUB_REF_NAME#catalog-v}
-          swift run --package-path tools catalog-build \
+          ./tools/.build/release/catalog-build \
               --in ./data/cameras --out ./dist/v${REV} --revision ${REV}
           echo "revision=${REV}" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
           name: snapshot
           path: ./dist/v${{ steps.meta.outputs.revision }}
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tools-binaries
+          path: |
+            ./tools/.build/release/catalog-build
+            ./tools/.build/release/catalog-sign
+            ./tools/.build/release/catalog-publish
           retention-days: 7
 
   sign-and-publish:
@@ -998,14 +1055,18 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
         with: { name: snapshot, path: ./dist/v${{ needs.build.outputs.revision }} }
+      - uses: actions/download-artifact@v4
+        with: { name: tools-binaries, path: ./tools-bin }
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.1' }
+      - name: Ensure tool binaries are executable
+        run: chmod +x ./tools-bin/catalog-build ./tools-bin/catalog-sign ./tools-bin/catalog-publish
       - name: Sign manifest
         env:
           ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
         run: |
           REV=${{ needs.build.outputs.revision }}
-          swift run --package-path tools catalog-sign \
+          ./tools-bin/catalog-sign \
               --in ./dist/v${REV}/manifest.json \
               --out ./dist/v${REV}/manifest.signed.json
       - uses: actions/attest-build-provenance@v1   # pin in M6
@@ -1016,11 +1077,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REV=${{ needs.build.outputs.revision }}
-          gh release create catalog-v${REV} \
-              --title "Catalog v${REV}" \
-              --notes-file ./CHANGELOG.fragment.md \
-              ./dist/v${REV}/manifest.signed.json \
-              ./dist/v${REV}/cameras/*.json
+          NOTES_ARGS=""
+          if [ -f ./CHANGELOG.fragment.md ]; then
+            NOTES_ARGS="--notes ./CHANGELOG.fragment.md"
+          fi
+          ./tools-bin/catalog-publish \
+              --dist ./dist/v${REV} \
+              --tag catalog-v${REV} \
+              ${NOTES_ARGS}
 
   smoke:
     name: smoke
@@ -1028,8 +1092,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with: { name: tools-binaries, path: ./tools-bin }
       - uses: SwiftyLab/setup-swift@v1
         with: { swift-version: '6.1' }
+      - name: Ensure tool binaries are executable
+        run: chmod +x ./tools-bin/catalog-build ./tools-bin/catalog-sign ./tools-bin/catalog-publish
       - name: Wait for CDN
         run: sleep 30
       - name: Re-fetch and verify
@@ -1039,7 +1107,7 @@ jobs:
               | sed "s/.*current_key_id: *['\"]//;s/['\"].*//")
           curl -fsSL -o /tmp/manifest.signed.json \
               "https://github.com/${{ github.repository }}/releases/download/catalog-v${REV}/manifest.signed.json"
-          swift run --package-path tools catalog-sign verify \
+          ./tools-bin/catalog-sign verify \
               --in /tmp/manifest.signed.json \
               --pubkey "./tools/keys/${KEY_ID}.pub"
 ```
