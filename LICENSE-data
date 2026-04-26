@@ -1,0 +1,14 @@
+Copyright (c) 2026 sobchak-security. All rights reserved.
+
+PROPRIETARY — ALL RIGHTS RESERVED
+
+The camera measurement data and all other contents in this repository,
+including but not limited to data/cameras/*.json,
+data/manifest.template.json, and schema/*.json, are the exclusive
+property of sobchak-security.
+
+No part of this repository may be reproduced, distributed, modified,
+sublicensed, or transmitted in any form or by any means without the
+prior written permission of the copyright holder.
+
+Unauthorised use, copying, or distribution is strictly prohibited.

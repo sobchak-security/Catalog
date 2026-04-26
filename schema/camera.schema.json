@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sobchak-security/Catalog/raw/main/schema/camera.schema.json",
+  "title": "CameraModel",
+  "description": "A single rangefinder camera model entry in the RF Buddy Catalog.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "createdAt",
+    "manufacturer",
+    "model",
+    "classifiers",
+    "yearOfBuild",
+    "rfCoupling",
+    "format",
+    "baseLength",
+    "magnification"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Stable UUIDv4 that identifies this model record across all revisions."
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "ISO 8601 date the record was first added to the catalog (YYYY-MM-DD)."
+    },
+    "manufacturer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "classifiers": {
+      "type": "string",
+      "description": "Free-text description of camera type, coupling mechanism, and lens variants."
+    },
+    "yearOfBuild": {
+      "type": "object",
+      "required": ["from"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "integer",
+          "minimum": 1900,
+          "maximum": 2100
+        },
+        "to": {
+          "type": ["integer", "null"],
+          "minimum": 1900,
+          "maximum": 2100
+        }
+      }
+    },
+    "rfCoupling": {
+      "type": "string",
+      "enum": ["coupled", "uncoupled", "none"],
+      "description": "Whether the rangefinder is coupled to the focus mechanism."
+    },
+    "format": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Film format, e.g. '35mm', '6x6 on 120', '6x9 on 120'."
+    },
+    "baseLength": {
+      "$ref": "#/$defs/measurement",
+      "description": "Physical distance between rangefinder windows, in millimetres."
+    },
+    "magnification": {
+      "$ref": "#/$defs/measurement",
+      "description": "Viewfinder magnification (dimensionless ratio)."
+    },
+    "userAnnotation": {
+      "type": ["string", "null"],
+      "description": "Optional free-text annotation for display in the RF Buddy app."
+    }
+  },
+  "$defs": {
+    "measurement": {
+      "type": "object",
+      "required": ["value", "sources", "ranking"],
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": ["number", "null"],
+          "description": "Measured value. Null when no measurement is available yet."
+        },
+        "unit": {
+          "type": ["string", "null"],
+          "description": "Unit string where applicable (e.g. 'mm'). Omitted for dimensionless values."
+        },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/source" }
+        },
+        "ranking": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Editorial confidence ranking (0 = unknown, higher = more reliable)."
+        },
+        "note": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["title", "tier"],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": ["string", "null"]
+        },
+        "year": {
+          "type": ["integer", "null"],
+          "minimum": 1900,
+          "maximum": 2100
+        },
+        "type": {
+          "type": ["string", "null"],
+          "enum": ["book", "article", "web", "manual", "measurement", null]
+        },
+        "url": {
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "citation": {
+          "type": ["string", "null"]
+        },
+        "tier": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Authority tier: 1 = manufacturer data, 5 = unverified community claim."
+        }
+      }
+    }
+  }
+}
