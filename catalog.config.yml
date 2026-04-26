@@ -1,0 +1,12 @@
+repo:
+  owner:  sobchak-security
+  name:   Catalog
+  branch: main
+  # Constructed lazily by tooling: https://github.com/{owner}/{name}.git
+distribution:
+  jsdelivr_pattern: "https://cdn.jsdelivr.net/gh/{owner}/{name}@{tag}/{path}"
+  raw_pattern:      "https://raw.githubusercontent.com/{owner}/{name}/{tag}/{path}"
+  releases_pattern: "https://github.com/{owner}/{name}/releases/download/{tag}/{asset}"
+signing:
+  current_key_id: "rf-buddy-catalog-2026-04"
+  algorithm: "ed25519"

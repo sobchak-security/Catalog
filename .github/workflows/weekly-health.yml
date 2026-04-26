@@ -1,0 +1,32 @@
+name: weekly-health
+on:
+  schedule: [ { cron: "17 4 * * 1" } ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: SwiftyLab/setup-swift@v1
+        with: { swift-version: "6.0" }
+      - name: Build tools
+        run: swift build --package-path tools -c release
+      - name: Probe CDN endpoints
+        run: ./tools/.build/release/catalog-validate cdn-probe
+      - name: Citation link rot
+        run: |
+          ./tools/.build/release/catalog-validate link-rot \
+              --in ./data/cameras \
+              --report ./docs/health/$(date +%F).md
+      - name: Open PR with report
+        uses: peter-evans/create-pull-request@v6 # pin in M6
+        with:
+          title: "weekly-health: ${{ github.run_number }}"
+          branch: "auto/health-${{ github.run_id }}"
+          base: main
+          add-paths: docs/health/

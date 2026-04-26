@@ -1,0 +1,7 @@
+# Default owner for everything
+*                       @sobchak-security
+
+/tools/                 @sobchak-security
+/.github/               @sobchak-security
+/schema/                @sobchak-security
+/data/cameras/          @sobchak-security
