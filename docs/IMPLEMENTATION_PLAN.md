@@ -234,13 +234,15 @@ A second ruleset named `protect-release-tags`, target pattern
 
 | Rule | Setting |
 |------|---------|
-| Restrict creations | **on**, bypass list = the GitHub Actions bot only |
 | Restrict deletions | **on** |
-| Restrict updates | **on** (tags are immutable) |
+| Restrict updates | **on** (tags are immutable once pushed) |
 
-This means **no human** can create a `catalog-v*` tag manually — only
-the publish workflow can. Combined with the protected environment
-(§5.3), this guarantees every release is reproducible from a CI run.
+Creation is deliberately **unrestricted**: the `bypass_actors` mechanism
+requires an organisation-scoped integration on personal free-tier
+accounts, so restricting creation would prevent the repository owner
+from pushing tags at all. The security goal — ensuring that once a
+`catalog-v*` tag exists it cannot be deleted or force-moved — is fully
+achieved by the deletion and update rules alone.
 
 ### 3.6 Settings → Collaborators / Manage access
 
@@ -1185,18 +1187,18 @@ updates:
   "enforcement": "active",
   "conditions": { "ref_name": { "include": ["refs/tags/catalog-v*"], "exclude": [] } },
   "rules": [
-    { "type": "creation" },
     { "type": "deletion" },
     { "type": "update" }
-  ],
-  "bypass_actors": [
-    { "actor_type": "Integration", "actor_id": 15368, "bypass_mode": "always" }
   ]
 }
 ```
 
-(Actor ID 15368 is the GitHub Actions bot. Confirm against the live API
-at setup time.)
+> `creation` is intentionally omitted. On a personal free-tier account,
+> `bypass_actors` only accepts `RepositoryRole` actors — the
+> `Integration` actor type (GitHub Actions bot) is an organisation-only
+> feature. Restricting creation without a valid bypass would block the
+> repository owner from pushing tags. The immutability guarantee
+> (deletion + update protection) is sufficient.
 
 ### B.4 `.github/pull_request_template.md`
 
