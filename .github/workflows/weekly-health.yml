@@ -24,9 +24,20 @@ jobs:
               --in ./data/cameras \
               --report ./docs/health/$(date +%F).md
       - name: Open PR with report
-        uses: peter-evans/create-pull-request@v6 # pin in M6
-        with:
-          title: "weekly-health: ${{ github.run_number }}"
-          branch: "auto/health-${{ github.run_id }}"
-          base: main
-          add-paths: docs/health/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPORT="docs/health/$(date +%F).md"
+          BRANCH="auto/health-${{ github.run_id }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$REPORT"
+          git diff --cached --quiet && exit 0   # nothing to commit → skip PR
+          git commit -m "weekly-health: add report $(date +%F)"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "weekly-health: ${{ github.run_number }}" \
+            --body  "Automated health report for $(date +%F). See \`$REPORT\`." \
+            --base  main \
+            --head  "$BRANCH"

@@ -88,8 +88,8 @@ signing:
 ```
 
 All Swift CLI tools in `tools/`, every workflow in `.github/workflows/`,
-and every doc cross-link reads from this file (workflows via
-`actions/checkout` + a small `yq` step; tools via a Codable struct).
+and every doc cross-link reads from this file (workflows use `grep`/`sed`
+to extract values at runtime; tools use a Codable struct).
 **Never hard-code the URL anywhere else.**
 
 ### 2.2 In the consumer (RF Buddy app)
@@ -281,12 +281,35 @@ contributors at the PR flow.
 
 ### 3.9 Settings → Actions → General
 
+Apply in order; click **Save** after each section.
+
+**Actions permissions** — select the third radio button:
+> Allow `sobchak-security`, and select non-`sobchak-security`, actions and reusable workflows
+
+| Sub-option | Value |
+|---|---|
+| Allow actions created by GitHub | **on** (covers `actions/*` and `github/*`) |
+| Allow Marketplace actions by verified creators | **off** |
+| Specified actions and reusable workflows | `SwiftyLab/setup-swift@*` |
+
+> Note: on a personal free-tier account the option label reads
+> "Allow `OWNER`, and select non-`OWNER`…" — there is no
+> organisation-level "Allow only this organisation" radio button.
+> `actions/*` and `github/*` are covered by the checkbox above;
+> they do not need to be typed into the text box.
+
+**Workflow permissions**
+
 | Setting | Value |
 |---------|-------|
-| Actions permissions | "Allow `sobchak-security` actions and reusable workflows" + "Allow specified actions" |
-| Allowed actions | `actions/*`, `github/*`, `softprops/action-gh-release@*` (pinned by SHA, not tag, in the workflow itself) |
-| Workflow permissions | **Read repository contents permission** (default minimal) |
+| Default token permission | **Read repository contents and packages permissions** (restricted) |
 | Allow GitHub Actions to create and approve pull requests | **off** |
+
+**Fork pull request workflows**
+
+| Setting | Value |
+|---------|-------|
+| Approval for running fork pull request workflows | **Require approval for first-time contributors** (default) |
 
 ### 3.10 Settings → Environments
 
@@ -383,8 +406,10 @@ Steps:
 4. **Job 2 — `sign-and-publish`:** depends on `build`, targets
    environment `production`. **Requires manual approval** (§3.10).
    Downloads the artifact, signs the manifest with the in-memory
-   `ED25519_PRIVATE_KEY`, then runs `gh release create catalog-v{N} \
-   --notes-file CHANGELOG.fragment.md ./dist/v{N}/*` to publish.
+   `ED25519_PRIVATE_KEY`, then runs `catalog-publish --dist dist/v{N}
+   --tag catalog-v{N} [--notes CHANGELOG.fragment.md]` to create the
+   GitHub Release. `catalog-publish` shells out to the `gh` CLI bundled
+   in the Actions runner — no third-party action required.
 5. **Job 3 — `smoke`:** depends on `sign-and-publish`. Fetches the
    freshly-published release via the public CDN URL (jsDelivr) and
    re-verifies the signature with the public key bundled in
@@ -410,8 +435,9 @@ Checks:
   allow-list (read from RF Buddy repo's `Catalog.xcconfig` via a public
   raw URL).
 - **Citation link rot** — HEAD-checks every URL in every `sources[]`
-  entry. Reports rotted URLs as a PR-ready Markdown report committed
-  to `docs/health/{date}.md` via an automated PR.
+  entry. Reports rotted URLs as a Markdown report written to
+  `docs/health/{date}.md`; the workflow commits the file on a branch
+  and opens a PR using `gh pr create` (no third-party action).
 - **Action pin freshness** — verifies pinned action SHAs still exist
   upstream.
 
@@ -682,11 +708,18 @@ produces a file the consumer can verify with the public key.
 
 **Tasks:**
 
-1. Configure repository settings per §3.2–§3.10 via the GitHub web UI
-   (or `gh api` calls scripted in `tools/setup/configure-repo.sh`).
-2. Create the `production` environment with manual approval and the
-   `ED25519_PRIVATE_KEY` secret.
-3. Write `.github/workflows/publish.yml` (Appendix A).
+1. Configure repository settings per §3.2–§3.10 by running
+   `task -t taskfile-install.dist.yaml all`
+   This is a **one-time operation** performed only when bootstrapping a new
+   instance of this repository.  It requires the `gh` CLI installed and
+   authenticated (`gh auth login`) on the machine executing the tasks.
+   No `gh` installation is needed afterwards; all automated workflows run
+   on GitHub-hosted runners that have it pre-installed.
+   Apply the remaining manual steps printed at the end of the task run
+   (Actions permissions, `ED25519_PRIVATE_KEY` secret).
+2. Write `.github/workflows/publish.yml` (Appendix A).
+3. Implement `catalog-publish` Swift tool (invoked by the publish workflow
+   to create the GitHub Release via `gh release create`).
 4. Push tag `catalog-v1` and verify the publish ran end-to-end.
 
 **Acceptance:** GitHub Releases page shows `catalog-v1` with a
@@ -1000,11 +1033,13 @@ jobs:
       - name: Re-fetch and verify
         run: |
           REV=${{ needs.build.outputs.revision }}
+          KEY_ID=$(grep -m1 'current_key_id:' catalog.config.yml \
+              | sed "s/.*current_key_id: *['\"]//;s/['\"].*//")
           curl -fsSL -o /tmp/manifest.signed.json \
               "https://github.com/${{ github.repository }}/releases/download/catalog-v${REV}/manifest.signed.json"
           swift run --package-path tools catalog-sign verify \
               --in /tmp/manifest.signed.json \
-              --pubkey ./tools/keys/$(yq '.signing.current_key_id' catalog.config.yml).pub
+              --pubkey "./tools/keys/${KEY_ID}.pub"
 ```
 
 ### A.3 `.github/workflows/weekly-health.yml`
@@ -1036,12 +1071,23 @@ jobs:
               --in ./data/cameras \
               --report ./docs/health/$(date +%F).md
       - name: Open PR with report
-        uses: peter-evans/create-pull-request@v6   # pin in M6
-        with:
-          title: "weekly-health: ${{ github.run_number }}"
-          branch: "auto/health-${{ github.run_id }}"
-          base: main
-          add-paths: docs/health/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPORT="docs/health/$(date +%F).md"
+          BRANCH="auto/health-${{ github.run_id }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$REPORT"
+          git diff --cached --quiet && exit 0
+          git commit -m "weekly-health: add report $(date +%F)"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "weekly-health: ${{ github.run_number }}" \
+            --body  "Automated health report for $(date +%F)." \
+            --base  main \
+            --head  "$BRANCH"
 ```
 
 ### A.4 `.github/dependabot.yml`
