@@ -531,7 +531,8 @@ Every job declares the **minimum** `permissions:` block:
   diff comment).
 - `publish.yml` build job: `contents: read`.
 - `publish.yml` sign-and-publish job: `contents: write` (for tag
-  release notes), `id-token: write` (for OIDC, if we add Sigstore later).
+  release notes), `attestations: write` (to persist provenance
+  attestations), `id-token: write` (for OIDC, if we add Sigstore later).
 - `weekly-health.yml`: `contents: write`, `pull-requests: write`.
 
 The org-level default token permission (§3.9) is **read-only**; jobs
@@ -1057,6 +1058,7 @@ jobs:
     environment: production            # manual approval gate
     permissions:
       contents: write
+      attestations: write
       id-token: write                  # for future Sigstore / attestations
     steps:
       - uses: actions/checkout@v6

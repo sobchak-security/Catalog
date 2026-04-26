@@ -377,6 +377,7 @@ Implementation details:
   `CHANGELOG.fragment.md` exists.
 - Job permissions are minimal for purpose:
   - `contents: write` (release creation)
+  - `attestations: write` (persist build provenance)
   - `id-token: write` (attestation / future signing workflows)
 
 ### 6.4 Job 3: smoke (post-publish verification)

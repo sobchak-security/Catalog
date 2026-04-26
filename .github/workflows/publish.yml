@@ -66,6 +66,7 @@ jobs:
     environment: production            # manual approval gate
     permissions:
       contents: write
+      attestations: write
       id-token: write                  # for future Sigstore / attestations
     steps:
       - uses: actions/checkout@v6
