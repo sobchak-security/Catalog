@@ -106,7 +106,7 @@ jobs:
           } > ./dist/_check/summary.md
       - name: Comment diff summary
         if: always()
-        uses: actions/github-script@v7 # pin by SHA in M6
+        uses: actions/github-script@v9 # pin by SHA in M6
         with:
           script: |
             const fs = require('fs');
